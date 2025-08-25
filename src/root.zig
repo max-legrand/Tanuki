@@ -68,6 +68,7 @@ pub fn Middleware(comptime T: type) type {
 pub const ServerConfigArgs = struct {
     address: []const u8 = "127.0.0.1",
     port: u16 = 5882,
+    max_concurrency: usize = 1024,
 };
 
 pub fn Server(comptime T: type) type {
@@ -77,6 +78,7 @@ pub fn Server(comptime T: type) type {
         middlewares: []Middleware(T),
         address: string,
         port: u16,
+        semaphore: std.Thread.Semaphore = .{},
 
         const Self = @This();
 
@@ -111,6 +113,7 @@ pub fn Server(comptime T: type) type {
                 .middlewares = &.{},
                 .address = config.address,
                 .port = config.port,
+                .semaphore = std.Thread.Semaphore{ .permits = config.max_concurrency },
             };
         }
 
@@ -172,13 +175,14 @@ pub fn Server(comptime T: type) type {
 
             while (true) {
                 const conn = try listener.accept();
-                // Limit concurrency with a semaphore if you want
+                self.semaphore.wait();
                 const thread = try std.Thread.spawn(.{}, connectionWrapper, .{ self, conn });
                 thread.detach();
             }
         }
 
         fn connectionWrapper(self: *Server(T), conn: std.net.Server.Connection) void {
+            defer self.semaphore.post();
             handleConnection(self, conn) catch |err| {
                 std.debug.print("Connection error: {s}\n", .{@errorName(err)});
             };

@@ -119,12 +119,42 @@ pub fn Server(comptime T: type) type {
             self.router.deinit();
         }
 
-        pub fn addMiddleware(self: *Self, allocator: std.mem.Allocator, M: type, config: M.Config) !void {
+        pub fn addMiddleware(
+            self: *Self,
+            allocator: std.mem.Allocator,
+            M: type,
+            config: ?M.Config,
+        ) !void {
             const m = try allocator.create(M);
-            m.* = try M.init(config, .{
-                .arena = allocator,
-                .allocator = allocator,
-            });
+
+            if (@hasDecl(M, "init")) {
+                const InitFn = @TypeOf(M.init);
+                const info = @typeInfo(InitFn);
+
+                if (info == .@"fn") {
+                    const params = info.@"fn".params.len;
+
+                    switch (params) {
+                        // init()
+                        0 => m.* = try M.init(),
+
+                        // init(config)
+                        1 => m.* = try M.init(config.?),
+
+                        // init(config, opts)
+                        2 => m.* = try M.init(config.?, .{
+                            .arena = allocator,
+                            .allocator = allocator,
+                        }),
+
+                        else => @compileError("Unsupported init signature for middleware " ++ @typeName(M)),
+                    }
+                } else {
+                    @compileError("Middleware init must be a function");
+                }
+            } else {
+                @compileError("Middleware " ++ @typeName(M) ++ " must define an init function");
+            }
 
             const iface = Middleware(T).init(m);
             const new_list = try allocator.alloc(Middleware(T), self.middlewares.len + 1);
@@ -173,10 +203,27 @@ pub fn Server(comptime T: type) type {
                 .req = &req,
                 .arena = allocator,
                 .headers = std.ArrayList(std.http.Header).empty,
+                .status = .ok,
             };
 
-            const path = allocator.dupe(u8, req.head.target) catch return;
+            var path = allocator.dupe(u8, req.head.target) catch return;
             const method = req.head.method;
+            // Parse the URL query params
+            const idx = std.mem.indexOf(u8, path, "?");
+            var query = std.StringHashMap(string).init(res.arena);
+            if (idx) |i| {
+                if (i < path.len - 1) {
+                    const slice = path[i + 1 ..];
+                    var param_iter = std.mem.splitScalar(u8, slice, '&');
+                    while (param_iter.next()) |item| {
+                        var split = std.mem.splitScalar(u8, item, '=');
+                        const key = split.next() orelse continue;
+                        const value = split.next() orelse "";
+                        try query.put(key, value);
+                    }
+                }
+                path = path[0..i];
+            }
 
             var body: []const u8 = "";
             const content_length = req.head.content_length;
@@ -192,6 +239,7 @@ pub fn Server(comptime T: type) type {
                 .body = body,
                 .target = path,
                 .method = method,
+                .query = query,
             };
 
             // Try exact match first

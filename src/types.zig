@@ -14,12 +14,14 @@ pub const Request = struct {
     body: string,
     target: string,
     method: std.http.Method,
+    query: std.StringHashMap(string),
 };
 
 pub const Response = struct {
     req: *std.http.Server.Request,
     arena: std.mem.Allocator,
     headers: std.ArrayList(std.http.Header),
+    status: std.http.Status,
 
     pub fn header(self: *Response, name: []const u8, value: []const u8) !void {
         const h = std.http.Header{ .name = name, .value = value };
@@ -27,6 +29,7 @@ pub const Response = struct {
     }
 
     pub fn write(self: *Response, status: std.http.Status, body: []const u8) !void {
+        self.status = status;
         try self.req.respond(body, .{
             .status = status,
             .extra_headers = self.headers.items,

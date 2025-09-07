@@ -228,6 +228,11 @@ pub fn Server(comptime T: type) type {
                 }
                 path = path[0..i];
             }
+            var headers = std.ArrayList(std.http.Header).empty;
+            var header_iter = req.iterateHeaders();
+            while (header_iter.next()) |header| {
+                try headers.append(allocator, header);
+            }
 
             var body: []const u8 = "";
             const content_length = req.head.content_length;
@@ -244,6 +249,7 @@ pub fn Server(comptime T: type) type {
                 .target = path,
                 .method = method,
                 .query = query,
+                .headers = headers,
             };
 
             // Try exact match first

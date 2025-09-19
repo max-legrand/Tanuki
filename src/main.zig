@@ -27,6 +27,7 @@ pub fn main() !void {
     try server.addMiddleware(allocator, Logger, .{});
 
     try server.router.get("/test", testfn);
+    try server.router.get("/stream", testStreaming);
     try server.router.get("/file/:name", serveFile);
 
     try server.start();
@@ -34,6 +35,20 @@ pub fn main() !void {
 
 fn testfn(_: *tanuki.Request, res: *tanuki.Response) anyerror!void {
     try res.write(.ok, "hello world");
+}
+
+const State = struct {
+    fn handle(_: State, writer: *tanuki.StreamWriter) !void {
+        for (0..100_000) |i| {
+            const msg = try std.fmt.allocPrint(std.heap.page_allocator, "hello world {d}\n", .{i});
+            try writer.write(msg);
+            std.heap.page_allocator.free(msg);
+        }
+    }
+};
+
+fn testStreaming(_: *tanuki.Request, res: *tanuki.Response) anyerror!void {
+    try res.streamResponse(State{}, State.handle);
 }
 
 fn serveFile(req: *tanuki.Request, res: *tanuki.Response) anyerror!void {

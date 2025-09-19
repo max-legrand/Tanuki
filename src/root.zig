@@ -5,6 +5,8 @@ const types = @import("types.zig");
 pub const Request = types.Request;
 pub const Response = types.Response;
 pub const HandlerFn = types.HandlerFn;
+pub const StreamWriter = types.StreamWriter;
+
 const string = []const u8;
 
 pub fn Middleware(comptime T: type) type {
@@ -203,7 +205,8 @@ pub fn Server(comptime T: type) type {
             var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
 
             var req = http_server.receiveHead() catch return;
-            var res = Response{
+            const res = try allocator.create(Response);
+            res.* = Response{
                 .req = &req,
                 .arena = allocator,
                 .headers = std.ArrayList(std.http.Header).empty,
@@ -257,7 +260,7 @@ pub fn Server(comptime T: type) type {
                 var executor = Executor{
                     .index = 0,
                     .req = &request,
-                    .res = &res,
+                    .res = res,
                     .handler = self.handler,
                     .middlewares = self.middlewares,
                     .action = handler_fn,
@@ -315,7 +318,7 @@ pub fn Server(comptime T: type) type {
                         var executor = Executor{
                             .index = 0,
                             .req = &request,
-                            .res = &res,
+                            .res = res,
                             .handler = self.handler,
                             .middlewares = self.middlewares,
                             .action = route.handler,

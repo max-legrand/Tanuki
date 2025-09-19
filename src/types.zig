@@ -36,4 +36,55 @@ pub const Response = struct {
             .extra_headers = self.headers.items,
         });
     }
+
+    pub fn streamResponse(self: *Response, ctx: anytype, comptime handler: fn (
+        @TypeOf(ctx),
+        *StreamWriter,
+    ) anyerror!void) !void {
+        const headers = [_]std.http.Header{
+            .{
+                .name = "Content-Type",
+                .value = "text/event-stream",
+            },
+            .{
+                .name = "Cache-Control",
+                .value = "no-cache",
+            },
+            .{
+                .name = "Connection",
+                .value = "keep-alive",
+            },
+        };
+
+        const buffer: []u8 = try self.arena.alloc(u8, 1024);
+        var writer = try self.req.respondStreaming(buffer, .{ .respond_options = .{
+            .status = .ok,
+            .extra_headers = &headers,
+        } });
+
+        var thread_writer = StreamWriter{
+            ._buffer = buffer,
+            ._writer = &writer,
+            ._allocator = self.arena,
+        };
+
+        try handler(ctx, &thread_writer);
+        try writer.end();
+        return;
+    }
+};
+
+pub const StreamWriter = struct {
+    _writer: *std.http.BodyWriter,
+    _buffer: []u8,
+    _allocator: std.mem.Allocator,
+    pub fn write(self: *StreamWriter, bytes: []const u8) !void {
+        try self._writer.writer.writeAll(bytes);
+        try self._writer.writer.flush();
+        try self._writer.http_protocol_output.flush();
+    }
+    pub fn end(self: *StreamWriter) !void {
+        try self._writer.end();
+        self._allocator.free(self._buffer);
+    }
 };

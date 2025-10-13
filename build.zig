@@ -4,10 +4,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const brotli_pkg = b.dependency("brotli", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const brotli_lib = brotli_pkg.artifact("brotli");
+
     const mod = b.addModule("tanuki", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
+    mod.linkLibrary(brotli_lib);
+    mod.addIncludePath(brotli_pkg.path("c/include"));
 
     const exe = b.addExecutable(.{
         .name = "tanuki",

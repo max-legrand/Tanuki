@@ -1,6 +1,7 @@
 const std = @import("std");
 const router = @import("router.zig");
 const types = @import("types.zig");
+pub const utils = @import("utils.zig");
 
 pub const Request = types.Request;
 pub const Response = types.Response;

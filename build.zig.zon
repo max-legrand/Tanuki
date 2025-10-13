@@ -3,7 +3,12 @@
     .version = "0.1.0",
     .fingerprint = 0xbe87f192f1ab4728, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.1",
-    .dependencies = .{},
+    .dependencies = .{
+        .brotli = .{
+            .url = "git+https://github.com/max-legrand/brotli?ref=zig-build#b25c56611c1273f874e329cba353fcba45e3e81e",
+            .hash = "brotli-0.0.0-lm3Mvx51IQD3catHxcBaVun4pL5zAcWxrbB0pSKVQVf8",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

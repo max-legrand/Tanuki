@@ -82,6 +82,8 @@ pub fn Server(comptime T: type) type {
         address: string,
         port: u16,
         semaphore: std.Thread.Semaphore = .{},
+        running: bool = true,
+        listener: ?std.net.Server = null,
 
         const Self = @This();
 
@@ -123,6 +125,9 @@ pub fn Server(comptime T: type) type {
         pub fn deinit(self: *Self) void {
             for (self.middlewares) |mw| mw.deinit();
             self.router.deinit();
+            if (self.listener) |*l| {
+                l.deinit();
+            }
         }
 
         pub fn addMiddleware(
@@ -171,17 +176,27 @@ pub fn Server(comptime T: type) type {
 
         pub fn start(self: *Self) !void {
             var address = try std.net.Address.parseIp(self.address, self.port);
-            var listener = try address.listen(.{
+            self.listener = try address.listen(.{
                 .reuse_address = true,
             });
-            defer listener.deinit();
 
-            while (true) {
-                const conn = try listener.accept();
+            while (self.running) {
+                const conn = self.listener.?.accept() catch |err| {
+                    // If we're not running anymore, just return gracefully
+                    if (!self.running) return;
+                    return err;
+                };
                 self.semaphore.wait();
                 const thread = try std.Thread.spawn(.{}, connectionWrapper, .{ self, conn });
                 thread.detach();
             }
+        }
+
+        pub fn stop(self: *Self) void {
+            self.running = false;
+            // Connect to ourselves to unblock accept()
+            const addr = std.net.Address.parseIp(self.address, self.port) catch return;
+            _ = std.net.tcpConnectToAddress(addr) catch {};
         }
 
         fn connectionWrapper(self: *Server(T), conn: std.net.Server.Connection) void {

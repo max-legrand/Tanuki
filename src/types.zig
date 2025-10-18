@@ -24,6 +24,32 @@ pub const Response = struct {
     headers: std.ArrayList(std.http.Header),
     status: std.http.Status,
 
+    pub const CookieOptions = struct {
+        name: []const u8,
+        value: []const u8,
+        expires: ?i64,
+        domain: ?[]const u8,
+        secure: bool,
+        http_only: bool,
+    };
+
+    pub fn setCookie(self: *Response, opts: CookieOptions) !void {
+        var cookie = try std.fmt.allocPrint(self.arena, "{s}={s};", .{ opts.name, opts.value });
+        if (opts.expires) |expires| {
+            cookie = try std.fmt.allocPrint("{s} expires={d};", .{ cookie, expires });
+        }
+        if (opts.domain) |domain| {
+            cookie = try std.fmt.allocPrint("{s} domain={s};", .{ cookie, domain });
+        }
+        if (opts.secure) {
+            cookie = try std.fmt.allocPrint("{s} secure;", .{cookie});
+        }
+        if (opts.http_only) {
+            cookie = try std.fmt.allocPrint("{s} httpOnly;", .{cookie});
+        }
+        try self.header("Set-Cookie", cookie);
+    }
+
     pub fn header(self: *Response, name: []const u8, value: []const u8) !void {
         const h = std.http.Header{ .name = name, .value = value };
         try self.headers.append(self.arena, h);

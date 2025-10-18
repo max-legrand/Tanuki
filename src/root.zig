@@ -209,7 +209,7 @@ pub fn Server(comptime T: type) type {
         fn handleConnection(self: *Server(T), conn: std.net.Server.Connection) !void {
             defer conn.stream.close();
 
-            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
             defer arena.deinit();
             const allocator = arena.allocator();
 

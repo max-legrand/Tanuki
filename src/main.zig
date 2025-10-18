@@ -17,7 +17,7 @@ const Logger = struct {
 };
 
 pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -40,9 +40,9 @@ fn testfn(_: *tanuki.Request, res: *tanuki.Response) anyerror!void {
 const State = struct {
     fn handle(_: State, writer: *tanuki.StreamWriter) !void {
         for (0..100_000) |i| {
-            const msg = try std.fmt.allocPrint(std.heap.page_allocator, "hello world {d}\n", .{i});
+            const msg = try std.fmt.allocPrint(std.heap.smp_allocator, "hello world {d}\n", .{i});
             try writer.write(msg);
-            std.heap.page_allocator.free(msg);
+            std.heap.smp_allocator.free(msg);
         }
     }
 };

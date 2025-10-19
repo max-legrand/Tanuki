@@ -27,25 +27,44 @@ pub const Response = struct {
     pub const CookieOptions = struct {
         name: []const u8,
         value: []const u8,
-        max_age: ?u64,
-        domain: ?[]const u8,
-        secure: bool,
-        http_only: bool,
+        max_age: ?u64 = null,
+        expires_at: ?[]const u8 = null,
+        domain: ?[]const u8 = null,
+        path: ?[]const u8 = null,
+        secure: bool = false,
+        http_only: bool = false,
     };
 
     pub fn setCookie(self: *Response, opts: CookieOptions) !void {
+        if ((opts.max_age == null and opts.expires_at == null) or
+            (opts.max_age != null and opts.expires_at != null))
+        {
+            return error.CookieMustHaveEitherMaxAgeOrExpiresAt;
+        }
+        if ((opts.domain == null and opts.path == null) or
+            (opts.domain != null and opts.path != null))
+        {
+            return error.CookieMustHaveEitherDomainOrPath;
+        }
+
         var cookie = try std.fmt.allocPrint(self.arena, "{s}={s};", .{ opts.name, opts.value });
         if (opts.max_age) |max_age| {
-            cookie = try std.fmt.allocPrint(self.arena, "{s} max_age={d};", .{ cookie, max_age });
+            cookie = try std.fmt.allocPrint(self.arena, "{s} Max-Age={d};", .{ cookie, max_age });
+        }
+        if (opts.expires_at) |expires_at| {
+            cookie = try std.fmt.allocPrint(self.arena, "{s} Expires={s};", .{ cookie, expires_at });
         }
         if (opts.domain) |domain| {
-            cookie = try std.fmt.allocPrint(self.arena, "{s} domain={s};", .{ cookie, domain });
+            cookie = try std.fmt.allocPrint(self.arena, "{s} Domain={s};", .{ cookie, domain });
+        }
+        if (opts.path) |path| {
+            cookie = try std.fmt.allocPrint(self.arena, "{s} Path={s};", .{ cookie, path });
         }
         if (opts.secure) {
-            cookie = try std.fmt.allocPrint(self.arena, "{s} secure;", .{cookie});
+            cookie = try std.fmt.allocPrint(self.arena, "{s} Secure;", .{cookie});
         }
         if (opts.http_only) {
-            cookie = try std.fmt.allocPrint(self.arena, "{s} httpOnly;", .{cookie});
+            cookie = try std.fmt.allocPrint(self.arena, "{s} HttpOnly;", .{cookie});
         }
         try self.header("Set-Cookie", cookie);
     }

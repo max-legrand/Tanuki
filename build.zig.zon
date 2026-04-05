@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .brotli = .{
-            .url = "git+https://github.com/max-legrand/brotli?ref=zig-build#b25c56611c1273f874e329cba353fcba45e3e81e",
-            .hash = "brotli-0.0.0-lm3Mvx51IQD3catHxcBaVun4pL5zAcWxrbB0pSKVQVf8",
+            .url = "git+https://github.com/max-legrand/brotli?ref=zig-0.16#ea28442a456b0ba5076dd13713fd666e47a31022",
+            .hash = "brotli-0.0.0-lm3MvxZ1IQDEhAcg0C8dLD3R-J0dkPIWZfTxf6hzVbQP",
         },
     },
     .paths = .{

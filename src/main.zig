@@ -9,19 +9,27 @@ const Logger = struct {
     }
 
     pub fn execute(_: *const Logger, req: *tanuki.Request, _: *tanuki.Response, executor: anytype) !void {
-        const start = std.time.milliTimestamp();
+        const clock = std.Io.Clock.real;
+        const start_time = clock.now(req.io);
+        const start = start_time.toMilliseconds();
         try executor.next();
-        const end = std.time.milliTimestamp();
+        const end_time = clock.now(req.io);
+        const end = end_time.toMilliseconds();
         std.debug.print("Request {s} {s} took {d}ms\n", .{ @tagName(req.req.head.method), req.req.head.target, end - start });
     }
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var server = try tanuki.Server(void).init(allocator, {}, .{ .address = "0.0.0.0", .port = 8081 });
+    var server = try tanuki.Server(void).init(
+        allocator,
+        init.io,
+        {},
+        .{ .address = "0.0.0.0", .port = 8081 },
+    );
     defer server.deinit();
 
     try server.addMiddleware(allocator, Logger, .{});
@@ -56,10 +64,16 @@ fn serveFile(req: *tanuki.Request, res: *tanuki.Response) anyerror!void {
     const name = req.params.?.get("name");
     if (name == null) return error.ParamsNotFound;
     const file_name = req.params.?.get("name").?;
-    const file = try std.fs.cwd().openFile(file_name, .{ .mode = .read_only });
-    defer file.close();
+    const dir = std.Io.Dir.cwd();
+    const file = try dir.openFile(
+        req.io,
+        file_name,
+        .{ .mode = .read_only },
+    );
 
-    const data = try file.readToEndAlloc(res.arena, std.math.maxInt(u64));
+    const size = try file.stat(req.io);
+    const data = try res.arena.alloc(u8, size.size);
+    _ = try file.readPositionalAll(req.io, data, 0);
 
     try res.write(.ok, data);
 }

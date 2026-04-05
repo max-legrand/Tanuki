@@ -16,6 +16,7 @@ pub const Request = struct {
     method: std.http.Method,
     query: std.StringHashMap(string),
     headers: std.ArrayList(std.http.Header),
+    io: std.Io,
 };
 
 pub const Response = struct {

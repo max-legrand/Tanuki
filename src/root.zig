@@ -81,9 +81,10 @@ pub fn Server(comptime T: type) type {
         middlewares: []Middleware(T),
         address: string,
         port: u16,
-        semaphore: std.Thread.Semaphore = .{},
+        semaphore: std.Io.Semaphore = .{},
         running: bool = true,
-        listener: ?std.net.Server = null,
+        listener: ?std.Io.net.Server = null,
+        io: std.Io,
 
         const Self = @This();
 
@@ -111,14 +112,15 @@ pub fn Server(comptime T: type) type {
             }
         };
 
-        pub fn init(allocator: std.mem.Allocator, handler: if (T == void) void else *T, config: ServerConfigArgs) !Self {
+        pub fn init(allocator: std.mem.Allocator, io: std.Io, handler: if (T == void) void else *T, config: ServerConfigArgs) !Self {
             return .{
                 .handler = handler,
                 .router = try router.Router(T).init(allocator),
                 .middlewares = &.{},
                 .address = config.address,
                 .port = config.port,
-                .semaphore = std.Thread.Semaphore{ .permits = config.max_concurrency },
+                .semaphore = std.Io.Semaphore{ .permits = config.max_concurrency },
+                .io = io,
             };
         }
 
@@ -126,7 +128,7 @@ pub fn Server(comptime T: type) type {
             for (self.middlewares) |mw| mw.deinit();
             self.router.deinit();
             if (self.listener) |*l| {
-                l.deinit();
+                l.deinit(self.io);
             }
         }
 
@@ -175,18 +177,18 @@ pub fn Server(comptime T: type) type {
         }
 
         pub fn start(self: *Self) !void {
-            var address = try std.net.Address.parseIp(self.address, self.port);
-            self.listener = try address.listen(.{
+            var address = try std.Io.net.IpAddress.parse(self.address, self.port);
+            self.listener = try address.listen(self.io, .{
                 .reuse_address = true,
             });
 
             while (self.running) {
-                const conn = self.listener.?.accept() catch |err| {
+                const conn = self.listener.?.accept(self.io) catch |err| {
                     // If we're not running anymore, just return gracefully
                     if (!self.running) return;
                     return err;
                 };
-                self.semaphore.wait();
+                try self.semaphore.wait(self.io);
                 const thread = try std.Thread.spawn(.{}, connectionWrapper, .{ self, conn });
                 thread.detach();
             }
@@ -195,19 +197,23 @@ pub fn Server(comptime T: type) type {
         pub fn stop(self: *Self) void {
             self.running = false;
             // Connect to ourselves to unblock accept()
-            const addr = std.net.Address.parseIp(self.address, self.port) catch return;
-            _ = std.net.tcpConnectToAddress(addr) catch {};
+            const addr = std.Io.net.IpAddress.parse(self.address, self.port) catch return;
+            const socket = std.Io.net.IpAddress.connect(&addr, self.io, .{
+                .mode = .stream,
+                .timeout = .none,
+            }) catch return;
+            socket.close(self.io);
         }
 
-        fn connectionWrapper(self: *Server(T), conn: std.net.Server.Connection) void {
-            defer self.semaphore.post();
-            handleConnection(self, conn) catch |err| {
+        fn connectionWrapper(self: *Server(T), stream: std.Io.net.Stream) void {
+            defer self.semaphore.post(self.io);
+            handleConnection(self, stream) catch |err| {
                 std.debug.print("Connection error: {s}\n", .{@errorName(err)});
             };
         }
 
-        fn handleConnection(self: *Server(T), conn: std.net.Server.Connection) !void {
-            defer conn.stream.close();
+        fn handleConnection(self: *Server(T), stream: std.Io.net.Stream) !void {
+            defer stream.close(self.io);
 
             var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
             defer arena.deinit();
@@ -215,10 +221,10 @@ pub fn Server(comptime T: type) type {
 
             var recv_buffer: [4000]u8 = undefined;
             var send_buffer: [4000]u8 = undefined;
-            var conn_reader = conn.stream.reader(&recv_buffer);
-            var conn_writer = conn.stream.writer(&send_buffer);
+            var conn_reader = std.Io.net.Stream.reader(stream, self.io, &recv_buffer);
+            var conn_writer = std.Io.net.Stream.writer(stream, self.io, &send_buffer);
 
-            var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
+            var http_server = std.http.Server.init(&conn_reader.interface, &conn_writer.interface);
 
             var req = http_server.receiveHead() catch return;
             const res = try allocator.create(Response);
@@ -263,6 +269,7 @@ pub fn Server(comptime T: type) type {
 
             var request = Request{
                 .req = &req,
+                .io = self.io,
                 .params = null,
                 .body = body,
                 .target = path,

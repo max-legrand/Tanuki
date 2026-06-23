@@ -82,6 +82,7 @@ pub fn Server(comptime T: type) type {
         address: string,
         port: u16,
         semaphore: std.Io.Semaphore = .{},
+        max_concurrency: usize,
         running: bool = true,
         listener: ?std.Io.net.Server = null,
         io: std.Io,
@@ -120,11 +121,21 @@ pub fn Server(comptime T: type) type {
                 .address = config.address,
                 .port = config.port,
                 .semaphore = std.Io.Semaphore{ .permits = config.max_concurrency },
+                .max_concurrency = config.max_concurrency,
                 .io = io,
             };
         }
 
         pub fn deinit(self: *Self) void {
+            // Connection handlers run on detached threads. Drain every permit
+            // (acquiring one blocks until whichever in-flight handler holding
+            // it calls semaphore.post()) so all of them - including the
+            // connection stop() opened to unblock accept() - have finished
+            // before we tear down the router/listener/io they still reference.
+            for (0..self.max_concurrency) |_| {
+                self.semaphore.wait(self.io) catch break;
+            }
+
             for (self.middlewares) |mw| mw.deinit();
             self.router.deinit();
             if (self.listener) |*l| {
@@ -306,32 +317,47 @@ pub fn Server(comptime T: type) type {
                 }
 
                 for (method_routes.items) |route| {
-                    var route_segment_idx: usize = 0;
+                    var seg_idx: usize = 0;
                     var is_valid = true;
                     var params = std.StringHashMap(string).init(allocator);
-                    for (segments.items) |segment| {
-                        switch (route.segments[route_segment_idx]) {
+                    for (route.segments, 0..) |route_segment, route_idx| {
+                        switch (route_segment) {
                             .Static => |s| {
-                                if (!std.mem.eql(u8, segment, s)) {
+                                if (seg_idx >= segments.items.len or !std.mem.eql(u8, segments.items[seg_idx], s)) {
                                     is_valid = false;
                                     break;
                                 }
+                                seg_idx += 1;
                             },
                             .Param => |p| {
-                                if (route_segment_idx == route.segments.len - 1) {
-                                    const rest = try std.mem.join(allocator, "/", segments.items[route_segment_idx..]);
-                                    try params.put(p, rest);
+                                // A param requires at least one path segment to bind to.
+                                if (seg_idx >= segments.items.len) {
+                                    is_valid = false;
                                     break;
+                                }
+                                if (route_idx == route.segments.len - 1) {
+                                    // Trailing param absorbs the remaining segments.
+                                    const rest = try std.mem.join(allocator, "/", segments.items[seg_idx..]);
+                                    try params.put(p, rest);
+                                    seg_idx = segments.items.len;
                                 } else {
-                                    try params.put(p, segment);
+                                    try params.put(p, segments.items[seg_idx]);
+                                    seg_idx += 1;
                                 }
                             },
                             .Wildcard => {
-                                try params.put("*", segment);
+                                // Wildcard absorbs all remaining segments (possibly none).
+                                const rest = try std.mem.join(allocator, "/", segments.items[seg_idx..]);
+                                try params.put("*", rest);
+                                seg_idx = segments.items.len;
                                 break;
                             },
                         }
-                        route_segment_idx += 1;
+                    }
+                    // Every request segment must have been consumed, otherwise the
+                    // path is longer than the route and is not a match.
+                    if (is_valid and seg_idx != segments.items.len) {
+                        is_valid = false;
                     }
                     if (!is_valid) {
                         params.deinit();
@@ -356,8 +382,33 @@ pub fn Server(comptime T: type) type {
                 }
             }
 
-            // No match
-            try req.respond("Not Found", .{ .status = .not_found });
+            // No match: run the middleware chain around a default 404 handler
+            // so middleware (logging, etc.) still observes unmatched requests.
+            const not_found_action: *const HandlerFn(T) = if (T == void)
+                &struct {
+                    fn f(_: *Request, response: *Response) anyerror!void {
+                        try response.write(.not_found, "Not Found");
+                    }
+                }.f
+            else
+                &struct {
+                    fn f(_: *T, _: *Request, response: *Response) anyerror!void {
+                        try response.write(.not_found, "Not Found");
+                    }
+                }.f;
+
+            var not_found_executor = Executor{
+                .index = 0,
+                .req = &request,
+                .res = res,
+                .handler = self.handler,
+                .middlewares = self.middlewares,
+                .action = not_found_action,
+            };
+            not_found_executor.next() catch |err| {
+                const msg = try std.fmt.allocPrint(allocator, "Internal Server Error: {s}", .{@errorName(err)});
+                req.respond(msg, .{ .status = .internal_server_error }) catch {};
+            };
         }
     };
 }

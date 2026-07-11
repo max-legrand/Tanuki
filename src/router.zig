@@ -1,7 +1,5 @@
 const std = @import("std");
 const types = @import("types.zig");
-const Request = types.Request;
-const Response = types.Response;
 const HandlerFn = types.HandlerFn;
 const string = []const u8;
 
@@ -16,34 +14,35 @@ const RouteKey = struct {
     path: string,
 };
 
-fn routeHash(_: void, key: RouteKey) u64 {
-    var h = std.hash.Wyhash.init(0);
-    // method as small integer
-    std.hash.autoHash(&h, @intFromEnum(key.method));
-    // path bytes
-    h.update(key.path);
-    return h.final();
+fn route_hash(_: void, key: RouteKey) u64 {
+    var hash = std.hash.Wyhash.init(0);
+    std.hash.autoHash(&hash, @intFromEnum(key.method));
+    hash.update(key.path);
+    return hash.final();
 }
 
-fn routeEql(_: void, a: RouteKey, b: RouteKey) bool {
-    return a.method == b.method and std.mem.eql(u8, a.path, b.path);
+fn route_equal(_: void, left: RouteKey, right: RouteKey) bool {
+    if (left.method != right.method) return false;
+    return std.mem.eql(u8, left.path, right.path);
 }
 
-const RouteCtx = struct {
+const RouteContext = struct {
     pub fn hash(_: @This(), key: RouteKey) u64 {
-        return routeHash({}, key);
+        return route_hash({}, key);
     }
-    pub fn eql(_: @This(), a: RouteKey, b: RouteKey) bool {
-        return routeEql({}, a, b);
+
+    pub fn eql(_: @This(), left: RouteKey, right: RouteKey) bool {
+        return route_equal({}, left, right);
     }
 };
 
-const MethodCtx = struct {
+const MethodContext = struct {
     pub fn hash(_: @This(), key: std.http.Method) u64 {
         return @intFromEnum(key);
     }
-    pub fn eql(_: @This(), a: std.http.Method, b: std.http.Method) bool {
-        return a == b;
+
+    pub fn eql(_: @This(), left: std.http.Method, right: std.http.Method) bool {
+        return left == right;
     }
 };
 
@@ -53,86 +52,110 @@ pub fn Router(comptime T: type) type {
         segments: []Segment,
         handler: *const HandlerFn(T),
     };
-
-    const router = struct {
-        const Self = @This();
+    return struct {
         allocator: std.mem.Allocator,
+        route_map: std.HashMap(RouteKey, *const HandlerFn(T), RouteContext, 80),
+        routes: std.HashMap(
+            std.http.Method,
+            std.ArrayList(Route),
+            MethodContext,
+            80,
+        ),
 
-        // Use const function pointers in map
-        route_map: std.HashMap(RouteKey, *const HandlerFn(T), RouteCtx, 80),
-        routes: std.HashMap(std.http.Method, std.ArrayList(Route), MethodCtx, 80),
+        const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator) !Self {
-            var routes = std.HashMap(std.http.Method, std.ArrayList(Route), MethodCtx, 80).init(allocator);
-            // Pre-load with empty routes
-            const tags = std.meta.tags(std.http.Method);
-            for (tags) |tag| {
-                try routes.put(tag, std.ArrayList(Route).empty);
+            var routes = std.HashMap(
+                std.http.Method,
+                std.ArrayList(Route),
+                MethodContext,
+                80,
+            ).init(allocator);
+            for (std.meta.tags(std.http.Method)) |method| {
+                try routes.put(method, .empty);
             }
-
             return .{
-                .route_map = std.HashMap(RouteKey, *const HandlerFn(T), RouteCtx, 80).init(allocator),
+                .route_map = .init(allocator),
                 .allocator = allocator,
                 .routes = routes,
             };
         }
 
         pub fn deinit(self: *Self) void {
+            var route_lists = self.routes.valueIterator();
+            while (route_lists.next()) |route_list| {
+                for (route_list.items) |route| self.allocator.free(route.segments);
+                route_list.deinit(self.allocator);
+            }
             self.route_map.deinit();
             self.routes.deinit();
+            self.* = undefined;
         }
 
         pub fn get(self: *Self, path: string, handler: *const HandlerFn(T)) !void {
-            try self.processRoute(.GET, path, handler);
+            try self.process_route(.GET, path, handler);
         }
+
         pub fn post(self: *Self, path: string, handler: *const HandlerFn(T)) !void {
-            try self.processRoute(.POST, path, handler);
+            try self.process_route(.POST, path, handler);
         }
+
         pub fn put(self: *Self, path: string, handler: *const HandlerFn(T)) !void {
-            try self.processRoute(.PUT, path, handler);
+            try self.process_route(.PUT, path, handler);
         }
+
         pub fn delete(self: *Self, path: string, handler: *const HandlerFn(T)) !void {
-            try self.processRoute(.DELETE, path, handler);
+            try self.process_route(.DELETE, path, handler);
         }
+
         pub fn head(self: *Self, path: string, handler: *const HandlerFn(T)) !void {
-            try self.processRoute(.HEAD, path, handler);
+            try self.process_route(.HEAD, path, handler);
         }
+
         pub fn connect(self: *Self, path: string, handler: *const HandlerFn(T)) !void {
-            try self.processRoute(.CONNECT, path, handler);
+            try self.process_route(.CONNECT, path, handler);
         }
+
         pub fn options(self: *Self, path: string, handler: *const HandlerFn(T)) !void {
-            try self.processRoute(.OPTIONS, path, handler);
+            try self.process_route(.OPTIONS, path, handler);
         }
+
         pub fn trace(self: *Self, path: string, handler: *const HandlerFn(T)) !void {
-            try self.processRoute(.TRACE, path, handler);
+            try self.process_route(.TRACE, path, handler);
         }
+
         pub fn patch(self: *Self, path: string, handler: *const HandlerFn(T)) !void {
-            try self.processRoute(.PATCH, path, handler);
+            try self.process_route(.PATCH, path, handler);
         }
-        fn processRoute(self: *Self, method: std.http.Method, path: string, handler: *const HandlerFn(T)) !void {
-            const segments = try parsePathToSegments(self.allocator, path);
-            if (segments) |s| {
-                // dynamic route
-                var method_routes = self.routes.get(method) orelse return error.MethodNotInitialized;
-                const r = Route{
-                    .raw_path = path,
-                    .segments = s,
-                    .handler = handler,
-                };
-                try method_routes.append(self.allocator, r);
-                try self.routes.put(method, method_routes);
-            } else {
-                // exact match
+
+        fn process_route(
+            self: *Self,
+            method: std.http.Method,
+            path: string,
+            handler: *const HandlerFn(T),
+        ) !void {
+            const segments = try parse_path_segments(self.allocator, path);
+            if (segments == null) {
                 try self.route_map.put(.{ .method = method, .path = path }, handler);
+                return;
             }
+            const route_segments = segments.?;
+            errdefer self.allocator.free(route_segments);
+            const method_routes = self.routes.getPtr(method) orelse {
+                return error.MethodNotInitialized;
+            };
+            try method_routes.append(self.allocator, .{
+                .raw_path = path,
+                .segments = route_segments,
+                .handler = handler,
+            });
         }
     };
-
-    return router;
 }
 
-fn parsePathToSegments(allocator: std.mem.Allocator, path: string) !?[]Segment {
+fn parse_path_segments(allocator: std.mem.Allocator, path: string) !?[]Segment {
     var segments = std.ArrayList(Segment).empty;
+    errdefer segments.deinit(allocator);
     var pieces = std.mem.splitScalar(u8, path, '/');
     var has_dynamic = false;
     while (pieces.next()) |piece| {
@@ -141,16 +164,17 @@ fn parsePathToSegments(allocator: std.mem.Allocator, path: string) !?[]Segment {
             try segments.append(allocator, .{ .Wildcard = {} });
             has_dynamic = true;
             break;
-        } else if (piece[0] == ':') {
+        }
+        if (piece[0] == ':') {
             try segments.append(allocator, .{ .Param = piece[1..] });
             has_dynamic = true;
-        } else {
-            try segments.append(allocator, .{ .Static = piece });
+            continue;
         }
+        try segments.append(allocator, .{ .Static = piece });
     }
     if (!has_dynamic) {
         segments.deinit(allocator);
         return null;
     }
-    return try segments.toOwnedSlice(allocator);
+    return @as(?[]Segment, try segments.toOwnedSlice(allocator));
 }

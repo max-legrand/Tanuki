@@ -2,7 +2,33 @@
 
 Tanuki is a lightweight web framework (built with [zig](https://ziglang.org/)). The goal of Tanuki is to provide a simple interface for to pickup and handle HTTP requests and resonses.
 
-Currently, Tanuki supports only HTTP/1.1 and Zig 0.15.1.
+Currently, Tanuki supports only HTTP/1.1 and Zig 0.16.0.
+
+## Resource limits
+
+Tanuki bounds concurrency, request heads, request targets, request bodies, and per-request memory. The server allocates
+`max_concurrency * request_memory_bytes_max` bytes during initialization and gives each concurrent
+request a fixed slice. `start()` creates the fixed worker set before opening the listener, and accepted
+connections enter a bounded queue. All request-scoped framework allocations come from the worker's
+slice; Tanuki never creates a thread in reaction to a connection.
+
+Configure every limit explicitly for production workloads:
+
+```zig
+.{
+    .address = "0.0.0.0",
+    .port = 8081,
+    .max_concurrency = 32,
+    .request_body_bytes_max = 1024 * 1024,
+    .request_head_bytes_max = 16 * 1024,
+    .request_memory_bytes_max = 8 * 1024 * 1024,
+    .request_target_bytes_max = 8 * 1024,
+}
+```
+
+Requests exceeding the body or target limits receive HTTP 413 or 414 respectively. Exhausting a
+request's fixed memory slice terminates that connection with `error.OutOfMemory` rather than growing
+memory without a bound.
 
 # Usage
 To add Tanuki to your project, add the project to your build.zig.zon using the following command:

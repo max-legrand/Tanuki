@@ -53,7 +53,11 @@ pub const Response = struct {
             cookie = try std.fmt.allocPrint(self.arena, "{s} Max-Age={d};", .{ cookie, max_age });
         }
         if (opts.expires_at) |expires_at| {
-            cookie = try std.fmt.allocPrint(self.arena, "{s} Expires={s};", .{ cookie, expires_at });
+            cookie = try std.fmt.allocPrint(
+                self.arena,
+                "{s} Expires={s};",
+                .{ cookie, expires_at },
+            );
         }
         if (opts.domain) |domain| {
             cookie = try std.fmt.allocPrint(self.arena, "{s} Domain={s};", .{ cookie, domain });
